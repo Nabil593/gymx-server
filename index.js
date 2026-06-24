@@ -1123,9 +1123,8 @@ async function run() {
       },
     );
 
-
     //==================================================================================================================================
-    //                                                           HOME PAGE FEATURED CLASSES                                           ||
+    //                                                           HOME PAGE FEATURED CLASSES & LATEST FORUM                            ||
     //==================================================================================================================================
     // 1. GET: Fetch top featured classes based on booking count
     app.get("/api/public/featured-classes", async (req, res) => {
@@ -1151,10 +1150,29 @@ async function run() {
       }
     });
 
+    // 2. GET: Fetch 3-4 most recent forum posts for Home Page
+    app.get("/api/public/latest-forums", async (req, res) => {
+      try {
+        const latestPosts = await forumsCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .limit(3)
+          .toArray();
+
+        res.send({
+          success: true,
+          message: "Latest forum posts fetched successfully",
+          posts: latestPosts,
+        });
+      } catch (error) {
+        console.error("Error fetching latest forums:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
+      }
+    });
+
     
-
-
-
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
