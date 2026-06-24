@@ -41,8 +41,6 @@ async function run() {
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
 
-
-
     //==================================================================================================================================
     //                                                           TRAINER DASHBOARD                                                    ||
     //==================================================================================================================================
@@ -219,8 +217,6 @@ async function run() {
       }
     });
 
-
-
     //==================================================================================================================================
     //                                                           USER DASHBOARD                                                       ||
     //==================================================================================================================================
@@ -380,12 +376,10 @@ async function run() {
         const result = await favoritesCollection.deleteOne(query);
 
         if (result.deletedCount > 0) {
-          res
-            .status(200)
-            .json({
-              success: true,
-              message: "Removed from favorites successfully",
-            });
+          res.status(200).json({
+            success: true,
+            message: "Removed from favorites successfully",
+          });
         } else {
           res
             .status(404)
@@ -411,8 +405,6 @@ async function run() {
         res.status(500).json({ hasBooked: false, message: error.message });
       }
     });
-
-
 
     //==================================================================================================================================
     //                                                           ADMIN DASHBOARD                                                      ||
@@ -825,9 +817,6 @@ async function run() {
       }
     });
 
-    
-
-
     //==================================================================================================================================
     //                                                           ALL CLASSES PAGE                                                     ||
     //==================================================================================================================================
@@ -916,8 +905,226 @@ async function run() {
       }
     });
 
+    
+    //==================================================================================================================================
+    //                                                           ALL FORUM PAGE                                                       ||
+    //==================================================================================================================================
+    
+    // 1. COMMUNITY FORUM API WITH PAGINATION
+    app.get("/api/forum-posts", async (req, res) => {
+      try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 6; // প্রতি পেজে ৪টি করে পোস্ট দেখাবে
+        const skip = (page - 1) * limit;
 
+        // ডাটাবেজ থেকে ফোরাম কালেকশন (আপনার কালেকশনের নাম অনুযায়ী পরিবর্তন করতে পারেন)
+        const forumCollection = db.collection("forums");
 
+        // ১. মোট কতটি পোস্ট আছে তা কাউন্ট করা
+        const totalPosts = await forumCollection.countDocuments();
+
+        // ২. বর্তমান পেজের জন্য নির্দিষ্ট ডাটা ফেচ করা (সর্বশেষ পোস্ট আগে দেখাবে)
+        const posts = await forumCollection
+          .find({})
+          .sort({ createdAt: -1 }) // Newest posts first
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        // ৩. টোটাল পেজ সংখ্যা হিসাব করা
+        const totalPages = Math.ceil(totalPosts / limit);
+
+        res.status(200).json({
+          success: true,
+          posts,
+          currentPage: page,
+          totalPages,
+          totalPosts,
+        });
+      } catch (error) {
+        console.error("Error fetching forum posts:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
+      }
+    });
+
+    // 2. Get Single forum post & Comment
+    app.get("/api/public/forum-posts/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const forumCollection = db.collection("forums");
+
+        const post = await forumCollection.findOne({ _id: new ObjectId(id) });
+        if (!post) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Post not found" });
+        }
+        res.status(200).json({ success: true, post });
+      } catch (error) {
+        console.error("Error fetching single post:", error);
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error" });
+      }
+    });
+
+    // 3. Forum Like & Dislike 
+    app.patch("/api/user/forum-posts/:id/vote", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { userEmail, voteType } = req.body;
+        const forumCollection = db.collection("forums");
+
+        const post = await forumCollection.findOne({ _id: new ObjectId(id) });
+        if (!post) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Post not found" });
+        }
+
+        const upVotes = post.upVotes || [];
+        const downVotes = post.downVotes || [];
+
+        let updateDoc = {};
+
+        if (voteType === "like") {
+          if (upVotes.includes(userEmail)) {
+            // If you already liked it, it will be removed (toggle)
+            updateDoc = { $pull: { upVotes: userEmail } };
+          } else {
+            // Likes will be added and dislikes will be removed.
+            updateDoc = {
+              $addToSet: { upVotes: userEmail },
+              $pull: { downVotes: userEmail },
+            };
+          }
+        } else if (voteType === "dislike") {
+          if (downVotes.includes(userEmail)) {
+            // If you already dislike it, it will be removed.
+            updateDoc = { $pull: { downVotes: userEmail } };
+          } else {
+            // Dislikes will be added and likes will be removed.
+            updateDoc = {
+              $addToSet: { downVotes: userEmail },
+              $pull: { upVotes: userEmail },
+            };
+          }
+        }
+
+        await forumCollection.updateOne({ _id: new ObjectId(id) }, updateDoc);
+
+        const updatedPost = await forumCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        res.status(200).json({
+          success: true,
+          upVotes: updatedPost.upVotes || [],
+          downVotes: updatedPost.downVotes || [],
+        });
+      } catch (error) {
+        res.status(500).json({ success: false, message: "Voting failed" });
+      }
+    });
+
+    // 4. Add new Comment
+    app.post("/api/user/forum-posts/:id/comments", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { userEmail, userName, userImage, text } = req.body;
+        const forumCollection = db.collection("forums");
+
+        const newComment = {
+          commentId: new ObjectId().toString(),
+          userEmail,
+          userName,
+          userImage:
+            userImage ||
+            "https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=200",
+          text,
+          createdAt: new Date(),
+        };
+
+        await forumCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $push: { comments: newComment } },
+        );
+
+        res.status(201).json({ success: true, comment: newComment });
+      } catch (error) {
+        res
+          .status(500)
+          .json({ success: false, message: "Comment post failed" });
+      }
+    });
+
+    // 5. Edit Comment
+    app.patch(
+      "/api/user/forum-posts/:id/comments/:commentId",
+      async (req, res) => {
+        try {
+          const { id, commentId } = req.params;
+          const { text, userEmail } = req.body;
+          const forumCollection = db.collection("forums");
+
+          const result = await forumCollection.updateOne(
+            {
+              _id: new ObjectId(id),
+              "comments.commentId": commentId,
+              "comments.userEmail": userEmail,
+            },
+            { $set: { "comments.$.text": text } },
+          );
+
+          if (result.modifiedCount === 0) {
+            return res.status(403).json({
+              success: false,
+              message: "Unauthorized or comment not found",
+            });
+          }
+
+          res
+            .status(200)
+            .json({ success: true, message: "Comment updated successfully" });
+        } catch (error) {
+          res.status(500).json({ success: false, message: "Update failed" });
+        }
+      },
+    );
+
+    // 5. Delete Comment
+    app.delete(
+      "/api/user/forum-posts/:id/comments/:commentId",
+      async (req, res) => {
+        try {
+          const { id, commentId } = req.params;
+          const { userEmail } = req.body; // সিকিউরিটির জন্য বডি থেকে ইমেইল ভেরিফাই করা হচ্ছে
+          const forumCollection = db.collection("forums");
+
+          const result = await forumCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $pull: {
+                comments: { commentId: commentId, userEmail: userEmail },
+              },
+            },
+          );
+
+          if (result.modifiedCount === 0) {
+            return res
+              .status(403)
+              .json({ success: false, message: "Unauthorized action" });
+          }
+
+          res.status(200).json({ success: true, message: "Comment deleted" });
+        } catch (error) {
+          res.status(500).json({ success: false, message: "Delete failed" });
+        }
+      },
+    );
+
+    
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
