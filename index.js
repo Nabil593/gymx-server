@@ -41,8 +41,10 @@ async function run() {
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
 
+
+
     //==================================================================================================================================
-    //                                                           TRAINER                                                              ||
+    //                                                           TRAINER DASHBOARD                                                    ||
     //==================================================================================================================================
     // 1. ------Trainer Overview (Overview)-------
     app.get("/api/trainer-stats/:email", async (req, res) => {
@@ -69,15 +71,27 @@ async function run() {
     // 2. -------Add Trainer New Class (Add Class)--------
     app.post("/api/classes", async (req, res) => {
       const newClass = req.body;
-
-      const classData = {
-        ...newClass,
-        status: "Pending",
-        bookingCount: 0,
-        createdAt: new Date(),
-      };
+      const trainerEmail = newClass.trainerEmail;
 
       try {
+        const user = await db
+          .collection("user")
+          .findOne({ email: trainerEmail });
+        if (user && user.status === "Blocked") {
+          return res.status(403).json({
+            success: false,
+            message:
+              "Action denied. Your account has been suspended by the administrator.",
+          });
+        }
+
+        const classData = {
+          ...newClass,
+          status: "Pending",
+          bookingCount: 0,
+          createdAt: new Date(),
+        };
+
         const result = await classesCollection.insertOne(classData);
         res.send({ success: true, result });
       } catch (error) {
@@ -150,18 +164,29 @@ async function run() {
     });
 
     // 4. -------Triner Create Forum Post (Add Forum Post)----------
-    // New Forum Post Add API
     app.post("/api/forums", async (req, res) => {
       const newPost = req.body;
-
-      const postData = {
-        ...newPost,
-        upvotes: 0,
-        downvotes: 0,
-        createdAt: new Date(),
-      };
+      const authorEmail = newPost.authorEmail;
 
       try {
+        const user = await db
+          .collection("user")
+          .findOne({ email: authorEmail });
+        if (user && user.status === "Blocked") {
+          return res.status(403).json({
+            success: false,
+            message:
+              "Forbidden. Blocked users are restricted from publishing content.",
+          });
+        }
+
+        const postData = {
+          ...newPost,
+          upvotes: 0,
+          downvotes: 0,
+          createdAt: new Date(),
+        };
+
         const result = await forumsCollection.insertOne(postData);
         res.send({ success: true, result });
       } catch (error) {
@@ -194,55 +219,43 @@ async function run() {
       }
     });
 
+
+
     //==================================================================================================================================
-    //                                                           USER                                                                 ||
+    //                                                           USER DASHBOARD                                                       ||
     //==================================================================================================================================
     // 1. Get User Dashboard Overview Statistics & Status (UPDATED)
     app.get("/api/user-overview/:email", async (req, res) => {
       const { email } = req.params;
-
       try {
-        // ১. টোটাল বুকড ক্লাস কাউন্ট
         const totalBookedClasses = await db
           .collection("bookings")
           .countDocuments({ userEmail: email });
 
-        // ২. টোটাল ফেভারিট কাউন্ট
         const totalFavorites = await db
           .collection("favorites")
-          .countDocuments({ userEmail: email });
+          .countDocuments({ email: email });
 
-        // ৩. ট্রেইনার অ্যাপ্লিকেশনের বর্তমান স্ট্যাটাস ও ফিডব্যাক খোঁজা
         const trainerApplication = await db
           .collection("trainer-applications")
           .findOne(
             { email: email },
             { projection: { status: 1, feedback: 1 } },
           );
-
-        // 🛠️ ৪. ফিক্স: সরাসরি 'user' কালেকশন থেকে লেটেস্ট রোল খুঁজে বের করা
         const userDetails = await db
           .collection("user")
           .findOne({ email: email }, { projection: { role: 1 } });
 
-        const applicationStatus = trainerApplication?.status || "Not Applied";
-        const adminFeedback = trainerApplication?.feedback || null;
-        const currentRole = userDetails?.role || "user"; // 👈 লেটেস্ট রোল
-
         res.status(200).json({
           success: true,
-          stats: {
-            totalBookedClasses,
-            totalFavorites,
-          },
+          stats: { totalBookedClasses, totalFavorites },
           application: {
-            status: applicationStatus,
-            feedback: adminFeedback,
+            status: trainerApplication?.status || "Not Applied",
+            feedback: trainerApplication?.feedback || null,
           },
-          role: currentRole, // 👈 ফ্রন্টএন্ডে পাঠানোর জন্য রোলটি যোগ করা হলো
+          role: userDetails?.role || "user",
         });
       } catch (error) {
-        console.error("Error fetching user overview data:", error);
         res
           .status(500)
           .json({ success: false, message: "Internal server error" });
@@ -255,7 +268,7 @@ async function run() {
 
       try {
         const query = { userEmail: email };
-        // বুকিং করা ক্লাসগুলো লেটেস্ট ডেট অনুযায়ী সর্ট হয়ে আসবে
+
         const bookings = await bookingsCollection
           .find(query)
           .sort({ bookingDate: -1 })
@@ -276,7 +289,15 @@ async function run() {
       const { name, email, image, experience, specialty, bio } = req.body;
 
       try {
-        // ১. চেক করুন এই ইমেইল দিয়ে অলরেডি কোনো অ্যাপ্লিকেশন আছে কি না
+        const user = await db.collection("user").findOne({ email: email });
+        if (user && user.status === "Blocked") {
+          return res.status(403).json({
+            success: false,
+            message:
+              "Submission failed. Your account is restricted from applying.",
+          });
+        }
+
         const isApplied = await trainerApplicationsCollection.findOne({
           email,
         });
@@ -290,15 +311,14 @@ async function run() {
           });
         }
 
-        // ২. নতুন অ্যাপ্লিকেশনের ডাটা স্ট্রাকচার
         const applicationData = {
           name,
           email,
           image,
-          experience: parseInt(experience), // সংখ্যায় কনভার্ট করা হলো
+          experience: parseInt(experience),
           specialty,
           bio,
-          status: "Pending", // 👈 ডিফল্ট স্ট্যাটাস পেন্ডিং
+          status: "Pending",
           feedback: null,
           appliedAt: new Date(),
         };
@@ -319,27 +339,83 @@ async function run() {
     // 4. Get All Favorite Classes for a Specific User
     app.get("/api/my-favorites/:email", async (req, res) => {
       const { email } = req.params;
-
       try {
-        const query = { userEmail: email };
-        // লেটেস্ট যোগ করা ফেভারিট ক্লাসগুলো আগে দেখাবে
+        const query = { email: email };
         const favorites = await favoritesCollection
           .find(query)
           .sort({ addedAt: -1 })
           .toArray();
-
-        res.status(200).json({
-          success: true,
-          favorites,
-        });
+        res.status(200).json({ success: true, favorites });
       } catch (error) {
-        console.error("Error fetching favorite classes:", error);
         res.status(500).json({ success: false, message: error.message });
       }
     });
 
+    // 5. Favorites check (to keep the button active when reloaded)
+    app.get("/api/check-favorite", async (req, res) => {
+      try {
+        const { email, classId } = req.query;
+        if (!email || !classId) return res.status(200).json({ isFav: false });
+
+        const query = { email: email, classId: classId }; // ফিল্ড 'email' ঠিক করা হয়েছে
+        const exists = await favoritesCollection.findOne(query);
+        res.status(200).json({ isFav: !!exists });
+      } catch (error) {
+        res.status(500).json({ isFav: false, message: error.message });
+      }
+    });
+
+    // 6. Remove from favorite class list - API (Remove Favorite)
+    app.delete("/api/favorites", async (req, res) => {
+      try {
+        const { email, classId } = req.query;
+
+        if (!email || !classId) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Missing email or classId" });
+        }
+
+        const query = { email: email, classId: classId };
+        const result = await favoritesCollection.deleteOne(query);
+
+        if (result.deletedCount > 0) {
+          res
+            .status(200)
+            .json({
+              success: true,
+              message: "Removed from favorites successfully",
+            });
+        } else {
+          res
+            .status(404)
+            .json({ success: false, message: "Favorite item not found" });
+        }
+      } catch (error) {
+        console.error("Error removing favorite:", error);
+        res.status(500).json({ success: false, message: error.message });
+      }
+    });
+
+    // 7. Booking Check
+    app.get("/api/check-booking", async (req, res) => {
+      try {
+        const { email, classId } = req.query;
+        if (!email || !classId)
+          return res.status(200).json({ hasBooked: false });
+
+        const query = { userEmail: email, classId: classId };
+        const exists = await bookingsCollection.findOne(query);
+        res.status(200).json({ hasBooked: !!exists });
+      } catch (error) {
+        res.status(500).json({ hasBooked: false, message: error.message });
+      }
+    });
+
+
+
     //==================================================================================================================================
-    //                                                           ADMIN                                                                ||
+    //                                                           ADMIN DASHBOARD                                                      ||
     //==================================================================================================================================
     // 1. Get Admin Dashboard------(Overview)
     app.get("/api/admin-overview", async (req, res) => {
@@ -733,26 +809,112 @@ async function run() {
         const result = await forumsCollection.deleteOne(filter);
 
         if (result.deletedCount === 0) {
-          return res
-            .status(404)
-            .json({
-              success: false,
-              message: "Post not found or already deleted",
-            });
+          return res.status(404).json({
+            success: false,
+            message: "Post not found or already deleted",
+          });
         }
 
-        res
-          .status(200)
-          .json({
-            success: true,
-            message: "Forum post removed successfully from platform",
-          });
+        res.status(200).json({
+          success: true,
+          message: "Forum post removed successfully from platform",
+        });
       } catch (error) {
         console.error("Error deleting forum post:", error);
         res.status(500).json({ success: false, message: error.message });
       }
     });
 
+    
+
+
+    //==================================================================================================================================
+    //                                                           ALL CLASSES PAGE                                                     ||
+    //==================================================================================================================================
+
+    // 1. PUBLIC: Get All Approved Classes with Search, Filter & Pagination
+    app.get("/api/public/classes", async (req, res) => {
+      try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 6;
+        const skip = (page - 1) * limit;
+
+        const search = req.query.search || "";
+        const category = req.query.category || "";
+
+        let query = { status: "Approved" };
+
+        if (search) {
+          query.className = { $regex: search, $options: "i" };
+        }
+
+        if (category) {
+          query.category = category;
+        }
+
+        const totalClasses = await classesCollection.countDocuments(query);
+        const classes = await classesCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        res.status(200).json({
+          success: true,
+          classes,
+          totalPages: Math.ceil(totalClasses / limit),
+          currentPage: page,
+          totalClasses,
+        });
+      } catch (error) {
+        console.error("Error fetching public classes:", error);
+        res.status(500).json({ success: false, message: error.message });
+      }
+    });
+
+    // 2. PRIVATE/PROTECTED: Get Single Class Details by ID
+    app.get("/api/classes/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await classesCollection.findOne(query);
+
+        if (!result) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Class not found" });
+        }
+
+        res.status(200).json({ success: true, classData: result });
+      } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+      }
+    });
+
+    // 3. PRIVATE/PROTECTED: Add a class to favorites
+    app.post("/api/favorites", async (req, res) => {
+      try {
+        const favoriteData = req.body;
+
+        const query = {
+          email: favoriteData.email,
+          classId: favoriteData.classId,
+        };
+        const exists = await favoritesCollection.findOne(query);
+
+        if (exists) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Already in favorites" });
+        }
+
+        const result = await favoritesCollection.insertOne(favoriteData);
+        res.status(200).json({ success: true, insertedId: result.insertedId });
+      } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+      }
+    });
 
 
 
