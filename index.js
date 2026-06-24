@@ -905,11 +905,10 @@ async function run() {
       }
     });
 
-    
     //==================================================================================================================================
     //                                                           ALL FORUM PAGE                                                       ||
     //==================================================================================================================================
-    
+
     // 1. COMMUNITY FORUM API WITH PAGINATION
     app.get("/api/forum-posts", async (req, res) => {
       try {
@@ -970,7 +969,7 @@ async function run() {
       }
     });
 
-    // 3. Forum Like & Dislike 
+    // 3. Forum Like & Dislike
     app.patch("/api/user/forum-posts/:id/vote", async (req, res) => {
       try {
         const id = req.params.id;
@@ -1124,7 +1123,38 @@ async function run() {
       },
     );
 
+
+    //==================================================================================================================================
+    //                                                           HOME PAGE FEATURED CLASSES                                           ||
+    //==================================================================================================================================
+    // 1. GET: Fetch top featured classes based on booking count
+    app.get("/api/public/featured-classes", async (req, res) => {
+      try {
+        // Taking 4 classes sorted from largest to smallest (descending) according to bookingCount
+        // Only classes with "Approved" status are safe to show.
+        const featuredClasses = await classesCollection
+          .find({ status: "Approved" })
+          .sort({ bookingCount: -1 })
+          .limit(4)
+          .toArray();
+
+        res.send({
+          success: true,
+          message: "Featured classes fetched successfully",
+          classes: featuredClasses,
+        });
+      } catch (error) {
+        console.error("Error fetching featured classes:", error);
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
+      }
+    });
+
     
+
+
+
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
