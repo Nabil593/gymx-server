@@ -12,6 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 const uri = process.env.MONGODB_URL;
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -53,9 +54,23 @@ async function run() {
           trainerEmail: email,
         });
 
-        const totalStudents = await bookingsCollection.countDocuments({
-          trainerEmail: email,
-        });
+        const stats = await bookingsCollection
+          .aggregate([
+            {
+              $lookup: {
+                from: "classes",
+                localField: "classId",
+                foreignField: "_id",
+                as: "classDetails",
+              },
+            },
+            { $unwind: "$classDetails" },
+            { $match: { "classDetails.trainerEmail": email } },
+            { $count: "totalStudents" },
+          ])
+          .toArray();
+
+        const totalStudents = stats.length > 0 ? stats[0].totalStudents : 0;
 
         res.send({
           success: true,
@@ -403,6 +418,26 @@ async function run() {
         res.status(200).json({ hasBooked: !!exists });
       } catch (error) {
         res.status(500).json({ hasBooked: false, message: error.message });
+      }
+    });
+
+    //8.  Booking fetching route
+    app.get("/api/my-bookings/:email", async (req, res) => {
+      const { email } = req.params;
+      try {
+        const bookings = await db
+          .collection("bookings")
+          .find({ userEmail: email })
+          .toArray();
+
+        const formattedBookings = bookings.map((b) => ({
+          ...b,
+          bookedClassName: b.bookedClassName || b.className || "Unnamed Class",
+        }));
+
+        res.status(200).json({ success: true, bookings: formattedBookings });
+      } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
       }
     });
 
@@ -768,12 +803,12 @@ async function run() {
       try {
         const transactions = await bookingsCollection
           .find({ transactionId: { $exists: true, $ne: null } })
-          .sort({ date: -1 })
+          
+          .sort({ bookingDate: -1 })
           .toArray();
 
         res.status(200).json({ success: true, transactions });
       } catch (error) {
-        console.error("Error fetching transactions:", error);
         res.status(500).json({ success: false, message: error.message });
       }
     });
@@ -866,8 +901,16 @@ async function run() {
     app.get("/api/classes/:id", async (req, res) => {
       try {
         const id = req.params.id;
+
+        // ২৪ অক্ষরের মঙ্গোডিবি অবজেক্ট আইডি ভ্যালিডেশন
+        if (!id || id.length !== 24) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Invalid ID format" });
+        }
+
         const query = { _id: new ObjectId(id) };
-        const result = await classesCollection.findOne(query);
+        const result = await db.collection("classes").findOne(query); // আপনার কালেকশন নাম classes হলে
 
         if (!result) {
           return res
@@ -875,7 +918,7 @@ async function run() {
             .json({ success: false, message: "Class not found" });
         }
 
-        res.status(200).json({ success: true, classData: result });
+        res.send(result);
       } catch (error) {
         res.status(500).json({ success: false, message: error.message });
       }
@@ -1124,7 +1167,7 @@ async function run() {
     );
 
     //==================================================================================================================================
-    //                                                           HOME PAGE FEATURED CLASSES & LATEST FORUM                            ||
+    //                                                HOME PAGE FEATURED CLASSES & LATEST FORUM                                       ||
     //==================================================================================================================================
     // 1. GET: Fetch top featured classes based on booking count
     app.get("/api/public/featured-classes", async (req, res) => {
@@ -1169,6 +1212,157 @@ async function run() {
         res
           .status(500)
           .send({ success: false, message: "Internal server error" });
+      }
+    });
+
+    //==================================================================================================================================
+    //                                               STRIPE PAYMENY                                                                    ||
+    //==================================================================================================================================
+
+    // 1. Booking Confrim
+    app.post("/api/bookings/confirm", async (req, res) => {
+      try {
+        const bookingInfo = req.body;
+
+        console.log("Backend Received Data:", bookingInfo);
+
+        if (!bookingInfo.classId || !bookingInfo.userEmail) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Required fields missing." });
+        }
+
+        let parsedClassId;
+        try {
+          parsedClassId = new ObjectId(bookingInfo.classId);
+        } catch (idError) {
+          parsedClassId = bookingInfo.classId;
+        }
+
+        const finalBooking = {
+          classId: parsedClassId,
+          className: bookingInfo.className,
+          trainerName: bookingInfo.trainerName,
+          trainerEmail: bookingInfo.trainerEmail,
+          price: parseFloat(bookingInfo.price) || 0,
+          userEmail: bookingInfo.userEmail,
+          transactionId: bookingInfo.transactionId,
+          bookingDate: bookingInfo.bookingDate || new Date().toISOString(),
+          classSchedule: bookingInfo.classSchedule || {
+            day: bookingInfo.day || "Flexible Day",
+            time: bookingInfo.time || "Standard Time",
+          },
+        };
+
+        const bookingResult = await db
+          .collection("bookings")
+          .insertOne(finalBooking);
+
+        try {
+          await db
+            .collection("classes")
+            .updateOne({ _id: parsedClassId }, { $inc: { bookingCount: 1 } });
+        } catch (classErr) {
+          console.log("Optional class update skipped or failed");
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "Booking confirmed!",
+          result: bookingResult,
+        });
+      } catch (error) {
+        console.error("CRITICAL DATABASE ERROR:", error);
+        return res.status(500).json({ success: false, message: error.message });
+      }
+    });
+
+    // 2. Add this route to your backend file (right below the 'confirm' route).
+    app.post("/api/payments/create-checkout-session", async (req, res) => {
+      try {
+        const { classData, userEmail } = req.body;
+
+        if (!classData || !classData.price) {
+          return res
+            .status(400)
+            .json({ error: "Class data or price is missing." });
+        }
+
+        // সঠিক উপায়ে শিডিউল ডাটা বের করা
+        // যদি classSchedule অবজেক্টে সরাসরি day/time থাকে অথবা days অ্যারে থাকে
+        const scheduleDay =
+          classData.classSchedule?.day ||
+          (Array.isArray(classData.classSchedule?.days)
+            ? classData.classSchedule.days[0]
+            : "Flexible Day");
+
+        const scheduleTime = classData.classSchedule?.time || "Standard Time";
+
+        const unitAmount = Math.round(parseFloat(classData.price) * 100);
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          customer_email: userEmail,
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                product_data: {
+                  name: classData.className || "Gym Class",
+                  description: `Trainer: ${classData.trainerName}`,
+                },
+                unit_amount: unitAmount,
+              },
+              quantity: 1,
+            },
+          ],
+          mode: "payment",
+          // URL-এ ডেটা এনকোড করে পাঠানো হচ্ছে
+          success_url: `http://localhost:3000/payment/success?session_id={CHECKOUT_SESSION_ID}&classId=${classData._id}&className=${encodeURIComponent(classData.className)}&trainerName=${encodeURIComponent(classData.trainerName)}&price=${classData.price}&userEmail=${userEmail}&day=${encodeURIComponent(scheduleDay)}&time=${encodeURIComponent(scheduleTime)}`,
+          cancel_url: `http://localhost:3000/payment?classId=${classData._id}`,
+        });
+
+        return res.status(200).json({ id: session.url });
+      } catch (error) {
+        console.error("Stripe Error:", error);
+        return res.status(500).json({ error: error.message });
+      }
+    });
+
+    // 3. Check Booked
+    app.get("/api/check-booked", async (req, res) => {
+      try {
+        const { email, classId } = req.query;
+
+        if (!email || !classId) {
+          return res
+            .status(400)
+            .json({ success: false, message: "Missing email or classId" });
+        }
+
+        let query = { userEmail: email };
+
+        if (ObjectId.isValid(classId)) {
+          query.classId = new ObjectId(classId);
+        } else {
+          query.classId = classId;
+        }
+
+        let booking = await db.collection("bookings").findOne(query);
+
+        if (!booking) {
+          booking = await db.collection("bookings").findOne({
+            userEmail: email,
+            classId: classId,
+          });
+        }
+
+        res.status(200).json({ isBooked: !!booking });
+      } catch (error) {
+        console.error("Booking Check Error:", error);
+        res
+          .status(500)
+          .json({ isBooked: false, message: "Internal server error" });
       }
     });
 
