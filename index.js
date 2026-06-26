@@ -1318,8 +1318,8 @@ async function run() {
           ],
           mode: "payment",
           // URL-এ ডেটা এনকোড করে পাঠানো হচ্ছে
-          success_url: `http://localhost:3000/payment/success?session_id={CHECKOUT_SESSION_ID}&classId=${classData._id}&className=${encodeURIComponent(classData.className)}&trainerName=${encodeURIComponent(classData.trainerName)}&price=${classData.price}&userEmail=${userEmail}&day=${encodeURIComponent(scheduleDay)}&time=${encodeURIComponent(scheduleTime)}`,
-          cancel_url: `http://localhost:3000/payment?classId=${classData._id}`,
+          success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&classId=${classData._id}&className=${encodeURIComponent(classData.className)}&trainerName=${encodeURIComponent(classData.trainerName)}&price=${classData.price}&userEmail=${userEmail}&day=${encodeURIComponent(scheduleDay)}&time=${encodeURIComponent(scheduleTime)}`,
+          cancel_url: `${process.env.CLIENT_URL}/payment?classId=${classData._id}`,
         });
 
         return res.status(200).json({ id: session.url });
