@@ -8,7 +8,9 @@ const app = express();
 
 const port = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(
+  cors({}),
+);
 app.use(express.json());
 
 const uri = process.env.MONGODB_URL;
@@ -26,7 +28,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server (optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     // Database and collections defined
     const db = client.db("GymX-Auth");
@@ -803,7 +805,7 @@ async function run() {
       try {
         const transactions = await bookingsCollection
           .find({ transactionId: { $exists: true, $ne: null } })
-          
+
           .sort({ bookingDate: -1 })
           .toArray();
 
@@ -1287,9 +1289,6 @@ async function run() {
             .status(400)
             .json({ error: "Class data or price is missing." });
         }
-
-        // সঠিক উপায়ে শিডিউল ডাটা বের করা
-        // যদি classSchedule অবজেক্টে সরাসরি day/time থাকে অথবা days অ্যারে থাকে
         const scheduleDay =
           classData.classSchedule?.day ||
           (Array.isArray(classData.classSchedule?.days)
@@ -1317,7 +1316,6 @@ async function run() {
             },
           ],
           mode: "payment",
-          // URL-এ ডেটা এনকোড করে পাঠানো হচ্ছে
           success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}&classId=${classData._id}&className=${encodeURIComponent(classData.className)}&trainerName=${encodeURIComponent(classData.trainerName)}&price=${classData.price}&userEmail=${userEmail}&day=${encodeURIComponent(scheduleDay)}&time=${encodeURIComponent(scheduleTime)}`,
           cancel_url: `${process.env.CLIENT_URL}/payment?classId=${classData._id}`,
         });
@@ -1365,8 +1363,6 @@ async function run() {
           .json({ isBooked: false, message: "Internal server error" });
       }
     });
-
-    
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
