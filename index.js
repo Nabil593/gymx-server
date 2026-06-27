@@ -2,15 +2,14 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 
 dotenv.config();
 const app = express();
 
 const port = process.env.PORT || 5000;
 
-app.use(
-  cors({}),
-);
+app.use(cors({}));
 app.use(express.json());
 
 const uri = process.env.MONGODB_URL;
@@ -24,6 +23,62 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
+
+// JWT Verify Function
+const clientUrl = process.env.CLIENT_URL;
+
+const JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
+
+// User verifyUser && verifyToken function
+const verifyToken = async (req, res, next) => {
+  const authHeader = req?.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  // console.log(token);
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    // console.log(payload);
+    next();
+  } catch (error) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+};
+
+// Admin verifyAdmin function
+const verifyAdmin = async (req, res, next) => {
+  const token = req.headers.authorization.split(" ")[1];
+  const { payload } = await jwtVerify(token, JWKS);
+
+  if (payload.role === "admin") {
+    console.log(payload)
+    next();
+  } else {
+    return res
+      .status(403)
+      .json({ message: "Forbidden: Admin access required" });
+  }
+};
+
+// Trainer verifyTrainer function
+const verifyTrainer = async (req, res, next) => {
+  const token = req.headers.authorization.split(" ")[1];
+  const { payload } = await jwtVerify(token, JWKS);
+
+  if (payload.role === "trainer") {
+    // console.log(payload)
+    next();
+  } else {
+    return res
+      .status(403)
+      .json({ message: "Forbidden: Trainer access required" });
+  }
+};
 
 async function run() {
   try {
@@ -48,40 +103,45 @@ async function run() {
     //                                                           TRAINER DASHBOARD                                                    ||
     //==================================================================================================================================
     // 1. ------Trainer Overview (Overview)-------
-    app.get("/api/trainer-stats/:email", async (req, res) => {
-      const email = req.params.email;
+    app.get(
+      "/api/trainer-stats/:email",
+      verifyToken,
+      verifyTrainer,
+      async (req, res) => {
+        const email = req.params.email;
 
-      try {
-        const totalClasses = await classesCollection.countDocuments({
-          trainerEmail: email,
-        });
+        try {
+          const totalClasses = await classesCollection.countDocuments({
+            trainerEmail: email,
+          });
 
-        const stats = await bookingsCollection
-          .aggregate([
-            {
-              $lookup: {
-                from: "classes",
-                localField: "classId",
-                foreignField: "_id",
-                as: "classDetails",
+          const stats = await bookingsCollection
+            .aggregate([
+              {
+                $lookup: {
+                  from: "classes",
+                  localField: "classId",
+                  foreignField: "_id",
+                  as: "classDetails",
+                },
               },
-            },
-            { $unwind: "$classDetails" },
-            { $match: { "classDetails.trainerEmail": email } },
-            { $count: "totalStudents" },
-          ])
-          .toArray();
+              { $unwind: "$classDetails" },
+              { $match: { "classDetails.trainerEmail": email } },
+              { $count: "totalStudents" },
+            ])
+            .toArray();
 
-        const totalStudents = stats.length > 0 ? stats[0].totalStudents : 0;
+          const totalStudents = stats.length > 0 ? stats[0].totalStudents : 0;
 
-        res.send({
-          success: true,
-          stats: { totalClasses, totalStudents },
-        });
-      } catch (error) {
-        res.status(500).send({ message: error.message });
-      }
-    });
+          res.send({
+            success: true,
+            stats: { totalClasses, totalStudents },
+          });
+        } catch (error) {
+          res.status(500).send({ message: error.message });
+        }
+      },
+    );
 
     // 2. -------Add Trainer New Class (Add Class)--------
     app.post("/api/classes", async (req, res) => {
@@ -238,7 +298,7 @@ async function run() {
     //                                                           USER DASHBOARD                                                       ||
     //==================================================================================================================================
     // 1. Get User Dashboard Overview Statistics & Status (UPDATED)
-    app.get("/api/user-overview/:email", async (req, res) => {
+    app.get("/api/user-overview/:email", verifyToken, async (req, res) => {
       const { email } = req.params;
       try {
         const totalBookedClasses = await db
@@ -446,34 +506,35 @@ async function run() {
     //==================================================================================================================================
     //                                                           ADMIN DASHBOARD                                                      ||
     //==================================================================================================================================
-    // 1. Get Admin Dashboard------(Overview)
-    app.get("/api/admin-overview", async (req, res) => {
-      try {
-        // 🛠️ ফিক্স: কালেকশনের নাম 'user' করা হলো
-        const totalUsers = await db.collection("user").countDocuments({});
-        const totalClasses = await classesCollection.countDocuments({});
-        const totalBookedClasses = await bookingsCollection.countDocuments({});
+    // 1. Get Admin Dashboard-------(Overview Page)
+    app.get("/api/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
+        try {
+          const totalUsers = await db.collection("user").countDocuments({});
+          const totalClasses = await classesCollection.countDocuments({});
+          const totalBookedClasses = await bookingsCollection.countDocuments(
+            {},
+          );
 
-        res.status(200).json({
-          success: true,
-          stats: {
-            totalUsers,
-            totalClasses,
-            totalBookedClasses,
-          },
-        });
-      } catch (error) {
-        console.error("Error fetching admin overview data:", error);
-        res
-          .status(500)
-          .json({ success: false, message: "Internal server error" });
-      }
-    });
+          res.status(200).json({
+            success: true,
+            stats: {
+              totalUsers,
+              totalClasses,
+              totalBookedClasses,
+            },
+          });
+        } catch (error) {
+          console.error("Error fetching admin overview data:", error);
+          res
+            .status(500)
+            .json({ success: false, message: "Internal server error" });
+        }
+      },
+    );
 
-    // 2. Get All Registered Users-------(Manage Users)
-    app.get("/api/admin/users", async (req, res) => {
+    // 2. Get All Registered Users-------(Manage Users Page)
+    app.get("/api/admin/users", verifyToken, verifyAdmin, async (req, res) => {
       try {
-        // 🛠️ ফিক্স: কালেকশনের নাম 'user' করা হলো
         const users = await db.collection("user").find({}).toArray();
         res.status(200).json({ success: true, users });
       } catch (error) {
@@ -482,7 +543,7 @@ async function run() {
     });
 
     // Toggle Block / Unblock Status-Soft Block
-    app.patch("/api/admin/users/toggle-block/:id", async (req, res) => {
+    app.patch("/api/admin/users/toggle-block/:id", verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       const { currentStatus } = req.body;
 
@@ -508,14 +569,14 @@ async function run() {
     });
 
     // Promote Standard User to Admin
-    app.patch("/api/admin/users/make-admin/:id", async (req, res) => {
+    app.patch("/api/admin/users/make-admin/:id", verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
 
       try {
         const filter = { _id: new ObjectId(id) };
-        const updateDoc = { $set: { role: "admin" } }; // 👈 🛠️ ফিক্স: রোল ছোট হাতের 'admin' করা হলো
+        const updateDoc = { $set: { role: "admin" } };
 
-        const result = await db.collection("user").updateOne(filter, updateDoc); // 👈 🛠️ ফিক্স: কালেকশন 'user' করা হলো
+        const result = await db.collection("user").updateOne(filter, updateDoc);
 
         if (result.modifiedCount > 0) {
           res.status(200).json({
@@ -533,8 +594,8 @@ async function run() {
       }
     });
 
-    // 3. Get All Pending Trainer Applications-------(Applied Trainer)
-    app.get("/api/admin/trainer-applications/pending", async (req, res) => {
+    // 3. Get All Pending Trainer Applications-------(Applied Trainer Page)
+    app.get("/api/admin/trainer-applications/pending", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const applications = await db
           .collection("trainer-applications")
@@ -547,14 +608,11 @@ async function run() {
     });
 
     // Approve Trainer Application
-    app.patch(
-      "/api/admin/trainer-applications/approve/:id",
-      async (req, res) => {
+    app.patch("/api/admin/trainer-applications/approve/:id", verifyToken, verifyAdmin, async (req, res) => {
         const { id } = req.params;
         const { email, feedback } = req.body;
 
         try {
-          // ক) অ্যাপ্লিকেশন স্ট্যাটাস আপডেট
           const appFilter = { _id: new ObjectId(id) };
           const appUpdate = {
             $set: {
@@ -566,7 +624,6 @@ async function run() {
             .collection("trainer-applications")
             .updateOne(appFilter, appUpdate);
 
-          // খ) 🛠️ ফিক্সড: কালেকশনের নাম 'user' (users নয়) এবং রোল ছোট হাতের 'trainer'
           const userFilter = { email: email };
           const userUpdate = { $set: { role: "trainer" } };
           await db.collection("user").updateOne(userFilter, userUpdate);
@@ -581,9 +638,7 @@ async function run() {
     );
 
     // Reject Trainer Application
-    app.patch(
-      "/api/admin/trainer-applications/reject/:id",
-      async (req, res) => {
+    app.patch("/api/admin/trainer-applications/reject/:id", verifyToken, verifyAdmin, async (req, res) => {
         const { id } = req.params;
         const { feedback } = req.body;
 
@@ -616,10 +671,9 @@ async function run() {
       },
     );
 
-    // 4. Get All Active Trainers---------(Manage Trainers)
-    app.get("/api/admin/trainers", async (req, res) => {
+    // 4. Get All Active Trainers---------(Manage Trainers Page)
+    app.get("/api/admin/trainers", verifyToken, verifyAdmin, async (req, res) => {
       try {
-        // 🛠️ ফিক্সড: কালেকশন 'user' এবং রোল ছোট হাতের 'trainer'
         const trainers = await db
           .collection("user")
           .find({ role: "trainer" })
@@ -631,11 +685,10 @@ async function run() {
     });
 
     // Demote Trainer to Regular User
-    app.patch("/api/admin/trainers/demote/:email", async (req, res) => {
+    app.patch("/api/admin/trainers/demote/:email", verifyToken, verifyAdmin, async (req, res) => {
       const { email } = req.params;
 
       try {
-        // 🛠️ ফিক্সড: রোল ছোট হাতের "user" এবং কালেকশন 'user'
         const userUpdate = await db
           .collection("user")
           .updateOne({ email: email }, { $set: { role: "user" } });
@@ -666,10 +719,9 @@ async function run() {
       }
     });
 
-    // 5. Get All Classes---------(Manage Classes)
-    app.get("/api/admin/classes", async (req, res) => {
+    // 5. Get All Classes---------(Manage Classes Page)
+    app.get("/api/admin/classes", verifyToken, verifyAdmin, async (req, res) => {
       try {
-        // সব ক্লাস ডাটাবেজ থেকে ক্রিয়েট হওয়ার লেটেস্ট টাইম অনুযায়ী সর্ট করে আনা
         const classes = await db
           .collection("classes")
           .find({})
@@ -684,7 +736,7 @@ async function run() {
     });
 
     //  Approve a Class
-    app.patch("/api/admin/classes/approve/:id", async (req, res) => {
+    app.patch("/api/admin/classes/approve/:id", verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       try {
         const filter = { _id: new ObjectId(id) };
@@ -712,7 +764,7 @@ async function run() {
     });
 
     //  Reject a Class
-    app.patch("/api/admin/classes/reject/:id", async (req, res) => {
+    app.patch("/api/admin/classes/reject/:id", verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       try {
         const filter = { _id: new ObjectId(id) };
@@ -740,7 +792,7 @@ async function run() {
     });
 
     //  Delete a Class
-    app.delete("/api/admin/classes/delete/:id", async (req, res) => {
+    app.delete("/api/admin/classes/delete/:id", verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       try {
         const filter = { _id: new ObjectId(id) };
@@ -760,8 +812,8 @@ async function run() {
       }
     });
 
-    // 6. Create a New Forum Post----------(Add Forum Post)
-    app.post("/api/admin/forum-posts", async (req, res) => {
+    // 6. Create a New Forum Post----------(Add Forum Post Page)
+    app.post("/api/admin/forum-posts", verifyToken, verifyAdmin, async (req, res) => {
       const { title, image, description, author } = req.body;
 
       if (!title || !image || !description) {
@@ -800,8 +852,8 @@ async function run() {
       }
     });
 
-    // 7. Get All Stripe Payments----------(Transactions)
-    app.get("/api/admin/transactions", async (req, res) => {
+    // 7. Get All Stripe Payments----------(Transactions Page)
+    app.get("/api/admin/transactions", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const transactions = await bookingsCollection
           .find({ transactionId: { $exists: true, $ne: null } })
@@ -815,8 +867,8 @@ async function run() {
       }
     });
 
-    // 8. Get All Forum Posts----------(Forum Post Manage)
-    app.get("/api/admin/forums", async (req, res) => {
+    // 8. Get All Forum Posts----------(Forum Post Manage Page)
+    app.get("/api/admin/forums", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const posts = await forumsCollection
           .find({})
@@ -831,7 +883,7 @@ async function run() {
     });
 
     // Delete any Inappropriate Forum Post
-    app.delete("/api/admin/forums/delete/:id", async (req, res) => {
+    app.delete("/api/admin/forums/delete/:id", verifyToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       try {
         const filter = { _id: new ObjectId(id) };
@@ -1168,6 +1220,83 @@ async function run() {
       },
     );
 
+    // 6. Add Reply to a specific comment
+    app.post(
+      "/api/user/forum-posts/:id/comments/:commentId/replies",
+      async (req, res) => {
+        try {
+          const { id, commentId } = req.params;
+          const { userEmail, userName, userImage, text } = req.body;
+          const forumCollection = db.collection("forums");
+
+          const newReply = {
+            replyId: new ObjectId().toString(),
+            userEmail,
+            userName,
+            userImage,
+            text,
+            createdAt: new Date(),
+          };
+
+          const result = await forumCollection.updateOne(
+            { _id: new ObjectId(id), "comments.commentId": commentId },
+            { $push: { "comments.$.replies": newReply } },
+          );
+
+          if (result.modifiedCount === 0) {
+            return res
+              .status(404)
+              .json({ success: false, message: "Comment not found" });
+          }
+
+          res.status(201).json({ success: true, reply: newReply });
+        } catch (error) {
+          res
+            .status(500)
+            .json({ success: false, message: "Reply submission failed" });
+        }
+      },
+    );
+
+    // 7. Edit Reply
+    app.patch(
+      "/api/user/forum-posts/:id/comments/:commentId/replies/:replyId",
+      async (req, res) => {
+        const { id, commentId, replyId } = req.params;
+        const { text, userEmail } = req.body;
+
+        const result = await forumsCollection.updateOne(
+          {
+            _id: new ObjectId(id),
+            "comments.commentId": commentId,
+            "comments.replies.replyId": replyId,
+          },
+          { $set: { "comments.$[c].replies.$[r].text": text } },
+          {
+            arrayFilters: [
+              { "c.commentId": commentId },
+              { "r.replyId": replyId },
+            ],
+          },
+        );
+        res.send({ success: result.modifiedCount > 0 });
+      },
+    );
+
+    // 8. Delete Reply
+    app.delete(
+      "/api/user/forum-posts/:id/comments/:commentId/replies/:replyId",
+      async (req, res) => {
+        const { id, commentId, replyId } = req.params;
+
+        const result = await forumsCollection.updateOne(
+          { _id: new ObjectId(id), "comments.commentId": commentId },
+          { $pull: { "comments.$.replies": { replyId: replyId } } },
+        );
+        res.send({ success: result.modifiedCount > 0 });
+      },
+    );
+
     //==================================================================================================================================
     //                                                HOME PAGE FEATURED CLASSES & LATEST FORUM                                       ||
     //==================================================================================================================================
@@ -1363,6 +1492,8 @@ async function run() {
           .json({ isBooked: false, message: "Internal server error" });
       }
     });
+
+    
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
