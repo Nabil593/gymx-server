@@ -43,7 +43,7 @@ const verifyToken = async (req, res, next) => {
 
   try {
     const { payload } = await jwtVerify(token, JWKS);
-    // console.log(payload);
+    console.log(payload);
     next();
   } catch (error) {
     return res.status(403).json({ message: "Forbidden" });
@@ -56,7 +56,7 @@ const verifyAdmin = async (req, res, next) => {
   const { payload } = await jwtVerify(token, JWKS);
 
   if (payload.role === "admin") {
-    console.log(payload)
+    // console.log(payload)
     next();
   } else {
     return res
@@ -103,11 +103,7 @@ async function run() {
     //                                                           TRAINER DASHBOARD                                                    ||
     //==================================================================================================================================
     // 1. ------Trainer Overview (Overview)-------
-    app.get(
-      "/api/trainer-stats/:email",
-      verifyToken,
-      verifyTrainer,
-      async (req, res) => {
+    app.get("/api/trainer-stats/:email", verifyToken, verifyTrainer, async (req, res) => {
         const email = req.params.email;
 
         try {
@@ -144,7 +140,7 @@ async function run() {
     );
 
     // 2. -------Add Trainer New Class (Add Class)--------
-    app.post("/api/classes", async (req, res) => {
+    app.post("/api/classes", verifyToken, verifyTrainer, async (req, res) => {
       const newClass = req.body;
       const trainerEmail = newClass.trainerEmail;
 
@@ -176,7 +172,7 @@ async function run() {
 
     // 3. --------Show Trainer All Clases (My Class)---------
     //  Get All Classes API
-    app.get("/api/my-classes/:email", async (req, res) => {
+    app.get("/api/my-classes/:email", verifyToken, verifyTrainer, async (req, res) => {
       const email = req.params.email;
       try {
         const query = { trainerEmail: email };
@@ -188,7 +184,7 @@ async function run() {
     });
 
     // Update Classes API
-    app.put("/api/classes/:id", async (req, res) => {
+    app.put("/api/classes/:id", verifyToken, verifyTrainer, async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
       const filter = { _id: new ObjectId(id) };
@@ -215,7 +211,7 @@ async function run() {
     });
 
     // Delete Class API
-    app.delete("/api/classes/:id", async (req, res) => {
+    app.delete("/api/classes/:id", verifyToken, verifyTrainer, async (req, res) => {
       const id = req.params.id;
       try {
         const query = { _id: new ObjectId(id) };
@@ -227,7 +223,7 @@ async function run() {
     });
 
     // API to view Attendees (Students) of a specific class
-    app.get("/api/class-students/:className", async (req, res) => {
+    app.get("/api/class-students/:className", verifyToken, verifyTrainer, async (req, res) => {
       const className = req.params.className;
       try {
         const query = { bookedClassName: className };
@@ -239,7 +235,7 @@ async function run() {
     });
 
     // 4. -------Triner Create Forum Post (Add Forum Post)----------
-    app.post("/api/forums", async (req, res) => {
+    app.post("/api/forums", verifyToken, verifyTrainer, async (req, res) => {
       const newPost = req.body;
       const authorEmail = newPost.authorEmail;
 
@@ -271,7 +267,7 @@ async function run() {
 
     // 5. ------Show Trainer Forum Posts (My Forum Posts)--------
     // All Forum post Get API
-    app.get("/api/my-forums/:email", async (req, res) => {
+    app.get("/api/my-forums/:email", verifyToken, verifyTrainer, async (req, res) => {
       const email = req.params.email;
       try {
         const query = { authorEmail: email };
@@ -283,7 +279,7 @@ async function run() {
     });
 
     // Forum Post Delete API
-    app.delete("/api/forums/:id", async (req, res) => {
+    app.delete("/api/forums/:id", verifyToken, verifyTrainer, async (req, res) => {
       const id = req.params.id;
       try {
         const query = { _id: new ObjectId(id) };
@@ -336,7 +332,7 @@ async function run() {
     });
 
     // 2. Get All Booked Classes for a Specific User
-    app.get("/api/my-bookings/:email", async (req, res) => {
+    app.get("/api/my-bookings/:email", verifyToken, async (req, res) => {
       const { email } = req.params;
 
       try {
@@ -358,7 +354,7 @@ async function run() {
     });
 
     // 3. Post a Trainer Application
-    app.post("/api/trainer-applications", async (req, res) => {
+    app.post("/api/trainer-applications", verifyToken, async (req, res) => {
       const { name, email, image, experience, specialty, bio } = req.body;
 
       try {
@@ -425,7 +421,7 @@ async function run() {
     });
 
     // 5. Favorites check (to keep the button active when reloaded)
-    app.get("/api/check-favorite", async (req, res) => {
+    app.get("/api/check-favorite", verifyToken, async (req, res) => {
       try {
         const { email, classId } = req.query;
         if (!email || !classId) return res.status(200).json({ isFav: false });
@@ -439,7 +435,7 @@ async function run() {
     });
 
     // 6. Remove from favorite class list - API (Remove Favorite)
-    app.delete("/api/favorites", async (req, res) => {
+    app.delete("/api/favorites", verifyToken, async (req, res) => {
       try {
         const { email, classId } = req.query;
 
